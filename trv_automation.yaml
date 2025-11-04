@@ -1,6 +1,6 @@
 blueprint:
-  name: Termostat 6 Stref Czasowych + Obecność (ON/OFF)
-  description: Zaawansowane sterowanie TRV na podstawie 3 harmonogramów + Boost, obecności LUB oraz zabezpieczenia przed przegrzaniem (ON/OFF z histerezą). Wzmocniona konwersja FLOAT dla stabilności.
+  name: Termostat Minimalny Stabilny (T_Dzień/Noc/Away)
+  description: Kontrola TRV oparta na Twojej stabilnej logice: Dzień/Noc/Away i ścisłej histerezie ON/OFF (0.1°C).
   domain: automation
   input:
     trv_target:
@@ -8,65 +8,38 @@ blueprint:
       selector:
         entity: {domain: climate, multiple: false}
     room_sensor:
-      name: Zewnętrzny Czujnik Temperatury (Wygładzony)
-      description: Encja czujnika używana do odczytu temperatury w pomieszczeniu (zalecany filtr Moving Average).
+      name: Zewnętrzny Czujnik Temperatury
+      description: Encja czujnika używana do odczytu temperatury w pomieszczeniu.
       selector:
         entity:
           domain: sensor
           device_class: temperature
           multiple: false
     
-    # WEJŚCIA OBECNOŚCI (LOKALIZACJA TELEFONÓW)
     person_1_entity:
       name: Encja Obecności - Osoba 1
-      description: Lokalizacja telefonu/osoby nr 1.
       selector:
         entity: {domain: [person, device_tracker]}
     person_2_entity:
       name: Encja Obecności - Osoba 2
-      description: Lokalizacja telefonu/osoby nr 2.
       selector:
         entity: {domain: [person, device_tracker]}
     
-    # WEJŚCIA TEMPERATURY
     temp_comfort:
-      name: 1. Temperatura Komfortowa (DZIEŃ)
+      name: Temperatura Komfortowa (DZIEŃ)
       default: 21.0
       selector:
-        number: {min: 10, max: 30, unit_of_measurement: "°C", step: 0.5}
-    temp_sleep:
-      name: 2. Temperatura Nocna (SPANIE)
+        number: {min: 15, max: 30, unit_of_measurement: "°C", step: 0.5}
+    temp_sleep_away:
+      name: Temperatura Nocna / Poza Domem
       default: 19.0
       selector:
-        number: {min: 10, max: 30, unit_of_measurement: "°C", step: 0.5}
-    temp_midday_away:
-      name: 3. Temperatura Oszczędność (ŚRODEK DNIA)
-      default: 18.0
-      selector:
-        number: {min: 10, max: 30, unit_of_measurement: "°C", step: 0.5}
-    temp_boost:
-      name: 4. Temperatura Boost (Wzmocnienie)
-      description: Krótkotrwała podwyższona temperatura.
-      default: 23.0
-      selector:
-        number: {min: 15, max: 35, unit_of_measurement: "°C", step: 0.5}
-    temp_away:
-      name: 5. Temperatura Poza Domem (AWAY)
-      default: 16.0
-      selector:
-        number: {min: 10, max: 30, unit_of_measurement: "°C", step: 0.5}
-    temp_max_limit:
-      name: 6. Temperatura Maksymalna (Zabezpieczenie)
-      description: Temperatura, powyżej której TRV zostanie natychmiast wyłączony.
-      default: 24.0
-      selector:
-        number: {min: 15, max: 35, unit_of_measurement: "°C", step: 0.5}
+        number: {min: 10, max: 25, unit_of_measurement: "°C", step: 0.5}
     
-    # WEJŚCIE Histereza
     histeresis:
       name: Histereza (°C)
-      description: Margines tolerancji dla trybu ON/OFF, np. 0.1°C.
-      default: 0.2
+      description: Margines tolerancji (np. 0.1°C).
+      default: 0.1
       selector:
         number:
           min: 0.1
@@ -74,33 +47,14 @@ blueprint:
           unit_of_measurement: °C
           step: 0.1
 
-    # WEJŚCIA CZASOWE
     time_sleep:
-      name: A. Godzina Rozpoczęcia Nocy
+      name: Godzina Rozpoczęcia Nocy
       description: np. 21:00
       selector: {time: }
     time_wake:
-      name: B. Godzina Zakończenia Nocy
+      name: Godzina Zakończenia Nocy
       description: np. 07:00
       selector: {time: }
-    time_midday_start:
-      name: C. Godzina Rozpoczęcia Oszczędności (Środek Dnia)
-      description: np. 08:00
-      selector: {time: }
-    time_midday_end:
-      name: D. Godzina Zakończenia Oszczędności (Środek Dnia)
-      description: np. 16:00
-      selector: {time: }
-    time_boost:
-      name: E. Godzina Rozpoczęcia Boost (Wymagane)
-      description: Godzina włączenia Boost.
-      selector: {time: }
-    boost_duration:
-      name: F. Czas Trwania Boost (minuty)
-      description: Jak długo ma trwać Boost (np. 30 minut).
-      default: 30
-      selector:
-        number: {min: 10, max: 120, unit_of_measurement: "min", step: 10}
 
 mode: queued
 
@@ -111,18 +65,7 @@ variables:
   input_person_2: !input person_2_entity
   time_sleep_str: !input time_sleep
   time_wake_str: !input time_wake
-  time_midday_start_str: !input time_midday_start
-  time_midday_end_str: !input time_midday_end
-  time_boost_str: !input time_boost
-  boost_duration_min: !input boost_duration
-  input_comfort_temp: !input temp_comfort
-  input_sleep_temp: !input temp_sleep
-  input_midday_away_temp: !input temp_midday_away
-  input_boost_temp: !input temp_boost
-  input_away_temp: !input temp_away
-  input_max_temp: !input temp_max_limit
   histereza: !input histeresis
-
 
 trigger:
   # 1. Zmiana statusu obecności
@@ -130,18 +73,12 @@ trigger:
     entity_id: !input person_1_entity
   - platform: state
     entity_id: !input person_2_entity
-  # 2. Wyzwalanie w kluczowych godzinach (4 punkty harmonogramu + Boost)
+  # 2. Wyzwalanie w kluczowych godzinach
   - platform: time
     at: !input time_sleep
   - platform: time
     at: !input time_wake
-  - platform: time
-    at: !input time_midday_start
-  - platform: time
-    at: !input time_midday_end
-  - platform: time
-    at: !input time_boost
-  # 3. Zmiana temperatury z czujnika (dla szybkiej reakcji ON/OFF i przegrzania)
+  # 3. Zmiana temperatury z czujnika
   - platform: state
     entity_id: !input room_sensor
 
@@ -152,11 +89,8 @@ action:
       now_time: "{{ now().time() }}"
       sleep_time: "{{ as_datetime(time_sleep_str).time() }}"
       wake_time: "{{ as_datetime(time_wake_str).time() }}"
-      midday_start: "{{ as_datetime(time_midday_start_str).time() }}"
-      midday_end: "{{ as_datetime(time_midday_end_str).time() }}"
       
-      # WZMOCNIONA KONWERSJA FLOAT
-      current_room_temp: "{{ states(input_room_sensor) | float(20.0) }}"
+      current_room_temp: "{{ states(input_room_sensor) | float(20.0) }}" # Wymuszony FLOAT
       trv_mode: "{{ state_attr(input_trv, 'hvac_action') }}"
       
       # Logika obecności: Prawda, gdy CO NAJMNIEJ JEDNA osoba jest w domu
@@ -165,56 +99,33 @@ action:
         {% set person_2_home = is_state(input_person_2, 'home') %}
         {{ person_1_home or person_2_home }}
       
-      # Zabezpieczenie przed przegrzaniem (PRIORYTET 0)
-      is_overheating: "{{ current_room_temp >= input_max_temp | float(24.0) }}" # FLOAT
-
-      # Logika Boost (Aktywna tylko, gdy jesteś w domu)
-      is_boost_time: >
-        {% set now_dt = now() %}
-        {% set boost_start = today_at(time_boost_str) %}
-        {% set boost_end = boost_start + timedelta(minutes=boost_duration_min | int) %}
-        {{ is_home and now_dt >= boost_start and now_dt < boost_end }}
-      
-      # Logika Czasowa (Spanie): POPRAWIONA LOGIKA PRZEŁOMU PÓŁNOCY
+      # Logika Czasowa (Spanie): Poprawna Logika Przełomu Północy
       is_sleep_time: >
         {% if sleep_time > wake_time %}
           {{ now_time >= sleep_time or now_time < wake_time }}
         {% else %}
           {{ now_time >= sleep_time and now_time < wake_time }}
         {% endif %}
-
-      # Logika Czasowa (Oszczędność w dzień):
-      is_midday_time: "{{ now_time >= midday_start and now_time < midday_end }}"
         
       # 2. Obliczanie docelowej temperatury (Referencyjnej)
       target_temp: >
-        {% if is_boost_time %}
-          {# PRIORYTET 1: BOOST #}
-          {{ states(input_boost_temp) | float(23.0) }} # FLOAT
-        {% elif not is_home %}
-          {# PRIORYTET 2: JESTEŚMY POZA DOMEM (OBU) #}
-          {{ states(input_away_temp) | float(16.0) }} # FLOAT
+        {% if not is_home %}
+          {# PRIORYTET 1: JESTEŚMY POZA DOMEM #}
+          {{ input_sleep_away | float(19.0) }} 
         {% elif is_sleep_time %}
-          {# PRIORYTET 3: CZAS SPANIA (NOC) #}
-          {{ states(input_sleep_temp) | float(19.0) }} # FLOAT
-        {% elif is_midday_time %}
-          {# PRIORYTET 4: CZAS OSZCZĘDNOŚCI W ŚRODKU DNIA #}
-          {{ states(input_midday_away_temp) | float(18.0) }} # FLOAT
+          {# PRIORYTET 2: CZAS SPANIA (NOC) #}
+          {{ input_sleep_away | float(19.0) }} 
         {% else %}
-          {# PRIORYTET 5: CZAS KOMFORTU #}
-          {{ states(input_comfort_temp) | float(21.0) }} # FLOAT
+          {# PRIORYTET 3: CZAS KOMFORTU #}
+          {{ input_comfort_temp | float(21.0) }}
         {% endif %}
 
-      # 3. Logika Decyzyjna ON/OFF z Histerezą i ZABEZPIECZENIEM
+      # 3. Logika Decyzyjna ON/OFF z Histerezą
       target_hvac_mode: >
-        {% set histereza_float = histereza | float(0.2) %} # FLOAT TUTAJ
-        {% set target_temp_float = target_temp | float(21.0) %} # FLOAT TUTAJ
+        {% set histereza_float = histereza | float(0.1) %} # Wymuszony FLOAT
+        {% set target_temp_float = target_temp | float(21.0) %} 
         
-        {% if is_overheating %}
-          {# PRIORYTET 0: WYŁĄCZ W PRZYPADKU PRZEGRZANIA #}
-          off
-        
-        {% elif current_room_temp >= target_temp_float + histereza_float %} 
+        {% if current_room_temp >= target_temp_float + histereza_float %} 
           {# WYŁĄCZENIE (powyżej zadanej + margines) #}
           off
         
@@ -222,7 +133,7 @@ action:
           {# WŁĄCZENIE (poniżej zadanej - margines) #}
           heat
 
-        {% elif trv_mode == 'heating' %}
+        {% elif trv_mode == 'heating' or trv_mode == 'heat' %}
           {# KONTYNUACJA GRZANIA (w marginesie) #}
           heat
         
@@ -232,14 +143,11 @@ action:
         {% endif %}
       
   # 4. Akcje (Ustawienie trybu i temperatury referencyjnej)
-- service: climate.set_hvac_mode
+  - service: climate.set_hvac_mode
     target:
       entity_id: "{{ input_trv }}"
     data:
       hvac_mode: "{{ target_hvac_mode }}"
-
-  # DODANIE OPÓŹNIENIA - POCZEKAJ 0.5 SEKUNDY
-  - delay: "00:00:00.5"
 
   - service: climate.set_temperature
     target:
