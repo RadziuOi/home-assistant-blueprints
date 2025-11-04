@@ -1,10 +1,10 @@
 blueprint:
-  name: Termostat Minimalny Stabilny T_Dzien_Noc_Away
-  description: Kontrola TRV oparta na Twojej stabilnej logice Dzien/Noc/Away i scislej histerezie ON/OFF 0.1C.
+  name: Termostat Minimalny Stabilny T Dzien Noc Away
+  description: Kontrola TRV oparta na Twojej stabilnej logice Dzien Noc Away i scislej histerezie ON/OFF 0.1C.
   domain: automation
   input:
     trv_target:
-      name: Glowica TRV (Climate)
+      name: Glowica TRV Climate
       selector:
         entity: {domain: climate, multiple: false}
     room_sensor:
@@ -17,16 +17,16 @@ blueprint:
           multiple: false
     
     person_1_entity:
-      name: Encja Obecnosci - Osoba 1
+      name: Encja Obecnosci Osoba 1
       selector:
         entity: {domain: [person, device_tracker]}
     person_2_entity:
-      name: Encja Obecnosci - Osoba 2
+      name: Encja Obecnosci Osoba 2
       selector:
         entity: {domain: [person, device_tracker]}
     
     temp_comfort:
-      name: Temperatura Komfortowa (DZIEN)
+      name: Temperatura Komfortowa DZIEN
       default: 21.0
       selector:
         number: {min: 15, max: 30, unit_of_measurement: "°C", step: 0.5}
@@ -37,8 +37,8 @@ blueprint:
         number: {min: 10, max: 25, unit_of_measurement: "°C", step: 0.5}
     
     histeresis:
-      name: Histereza (C)
-      description: Margines tolerancji (np. 0.1C).
+      name: Histereza C
+      description: Margines tolerancji np. 0.1C.
       default: 0.1
       selector:
         number:
@@ -93,13 +93,13 @@ action:
       current_room_temp: "{{ states(input_room_sensor) | float(20.0) }}" # Wymuszony FLOAT
       trv_mode: "{{ state_attr(input_trv, 'hvac_action') }}"
       
-      # Logika obecności: Prawda, gdy CO NAJMNIEJ JEDNA osoba jest w domu
+      # Logika obecnosci: Prawda, gdy CO NAJMNIEJ JEDNA osoba jest w domu
       is_home: >
         {% set person_1_home = is_state(input_person_1, 'home') %}
         {% set person_2_home = is_state(input_person_2, 'home') %}
         {{ person_1_home or person_2_home }}
       
-      # Logika Czasowa (Spanie): Poprawna Logika Przełomu Północy
+      # Logika Czasowa Spanie: Poprawna Logika Przelomu Polnocy
       is_sleep_time: >
         {% if sleep_time > wake_time %}
           {{ now_time >= sleep_time or now_time < wake_time }}
@@ -107,7 +107,7 @@ action:
           {{ now_time >= sleep_time and now_time < wake_time }}
         {% endif %}
         
-      # 2. Obliczanie docelowej temperatury (Referencyjnej)
+      # 2. Obliczanie docelowej temperatury Referencyjnej
       target_temp: >
         {% if not is_home %}
           {# PRIORYTET 1: JESTEŚMY POZA DOMEM #}
@@ -120,17 +120,17 @@ action:
           {{ input_comfort_temp | float(21.0) }}
         {% endif %}
 
-      # 3. Logika Decyzyjna ON/OFF z Histerezą
+      # 3. Logika Decyzyjna ON/OFF z Histereza
       target_hvac_mode: >
         {% set histereza_float = histereza | float(0.1) %} # Wymuszony FLOAT
         {% set target_temp_float = target_temp | float(21.0) %} 
         
         {% if current_room_temp >= target_temp_float + histereza_float %} 
-          {# WYŁĄCZENIE (powyżej zadanej + margines) #}
+          {# WYLACZENIE (powyzej zadanej + margines) #}
           off
         
         {% elif current_room_temp <= target_temp_float - histereza_float %} 
-          {# WŁĄCZENIE (poniżej zadanej - margines) #}
+          {# WLACZENIE (ponizej zadanej - margines) #}
           heat
 
         {% elif trv_mode == 'heating' or trv_mode == 'heat' %}
@@ -138,11 +138,11 @@ action:
           heat
         
         {% else %}
-          {# KONTYNUACJA WYŁĄCZENIA (w marginesie) #}
+          {# KONTYNUACJA WYLACZENIA (w marginesie) #}
           off
         {% endif %}
       
-  # 4. Akcje (Ustawienie trybu i temperatury referencyjnej)
+  # 4. Akcje Ustawienie trybu i temperatury referencyjnej
   - service: climate.set_hvac_mode
     target:
       entity_id: "{{ input_trv }}"
