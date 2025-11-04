@@ -232,11 +232,14 @@ action:
         {% endif %}
       
   # 4. Akcje (Ustawienie trybu i temperatury referencyjnej)
-  - service: climate.set_hvac_mode
+- service: climate.set_hvac_mode
     target:
       entity_id: "{{ input_trv }}"
     data:
       hvac_mode: "{{ target_hvac_mode }}"
+
+  # DODANIE OPÓŹNIENIA - POCZEKAJ 0.5 SEKUNDY
+  - delay: "00:00:00.5"
 
   - service: climate.set_temperature
     target:
