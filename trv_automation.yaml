@@ -1,6 +1,6 @@
 blueprint:
   name: Termostat 3 Strefy Czasowe + Obecność (ON/OFF)
-  description: Ustawia tryb TRV na HEAT/OFF na podstawie zewnętrznego czujnika, 3 harmonogramów czasowych i obecności.
+  description: Ustawia tryb TRV na HEAT/OFF na podstawie zewnętrznego czujnika, 3 harmonogramów czasowych i obecności CO NAJMNIEJ JEDNEJ osoby.
   domain: automation
   input:
     trv_target:
@@ -15,11 +15,18 @@ blueprint:
           domain: sensor
           device_class: temperature
           multiple: false
-    presence_entity:
-      name: Encja Obecności
-      description: Encja śledząca obecność (np. group.domownicy, home/not_home).
+    
+    # WEJŚCIA OBECNOŚCI (LOKALIZACJA TELEFONÓW)
+    person_1_entity:
+      name: Encja Obecności - Osoba 1
+      description: Lokalizacja telefonu/osoby nr 1 (np. device_tracker.telefon_jan).
       selector:
-        entity: {domain: [person, group, binary_sensor]}
+        entity: {domain: [person, device_tracker]}
+    person_2_entity:
+      name: Encja Obecności - Osoba 2
+      description: Lokalizacja telefonu/osoby nr 2 (np. device_tracker.telefon_anna).
+      selector:
+        entity: {domain: [person, device_tracker]}
     
     # WEJŚCIA TEMPERATURY
     temp_comfort:
@@ -78,7 +85,8 @@ mode: queued
 variables:
   input_trv: !input trv_target
   input_room_sensor: !input room_sensor
-  input_presence: !input presence_entity
+  input_person_1: !input person_1_entity
+  input_person_2: !input person_2_entity
   time_sleep_str: !input time_sleep
   time_wake_str: !input time_wake
   time_midday_start_str: !input time_midday_start
@@ -91,10 +99,13 @@ variables:
 
 
 trigger:
-  # 1. Zmiana statusu obecności
+  # 1. Zmiana statusu obecności (Osoba 1)
   - platform: state
-    entity_id: !input presence_entity
-  # 2. Wyzwalanie w kluczowych godzinach (4 punkty przełączania)
+    entity_id: !input person_1_entity
+  # 2. Zmiana statusu obecności (Osoba 2)
+  - platform: state
+    entity_id: !input person_2_entity
+  # 3. Wyzwalanie w kluczowych godzinach (4 punkty przełączania)
   - platform: time
     at: !input time_sleep
   - platform: time
@@ -103,7 +114,7 @@ trigger:
     at: !input time_midday_start
   - platform: time
     at: !input time_midday_end
-  # 3. Zmiana temperatury z czujnika (dla szybkiej reakcji ON/OFF)
+  # 4. Zmiana temperatury z czujnika (dla szybkiej reakcji ON/OFF)
   - platform: state
     entity_id: !input room_sensor
 
@@ -117,25 +128,33 @@ action:
       midday_start: "{{ as_datetime(time_midday_start_str).time() }}"
       midday_end: "{{ as_datetime(time_midday_end_str).time() }}"
 
-      is_home: "{{ is_state(input_presence, 'home') }}"
+      # KLUCZOWA LOGIKA OBECNOŚCI: LUB (OR)
+      is_home: >
+        {% set person_1_home = is_state(input_person_1, 'home') %}
+        {% set person_2_home = is_state(input_person_2, 'home') %}
+        {{ person_1_home or person_2_home }}
+        
       current_room_temp: "{{ states(input_room_sensor) | float(20.0) }}"
       trv_mode: "{{ state_attr(input_trv, 'hvac_action') }}"
       
       # Logika Czasowa (gdy JESTEŚMY w domu):
       is_sleep_time: >
         {% if sleep_time > wake_time %}
+          {# Przez noc, np. 23:00 do 07:00 #}
           {{ now_time >= sleep_time or now_time < wake_time }}
         {% else %}
+          {# W ciągu dnia, np. 07:00 do 23:00 #}
           {{ now_time >= sleep_time and now_time < wake_time }}
         {% endif %}
 
       is_midday_time: >
+        {# Czas oszczędności w środku dnia, np. 08:00 do 16:00 #}
         {{ now_time >= midday_start and now_time < midday_end }}
         
       # 2. Obliczanie docelowej temperatury (Referencyjnej)
       target_temp: >
         {% if not is_home %}
-          {# PRIORYTET 1: JESTEŚMY POZA DOMEM #}
+          {# PRIORYTET 1: JESTEŚMY POZA DOMEM (OBU) #}
           {{ states(input_away_temp) | float(16.0) }}
         {% elif is_sleep_time %}
           {# PRIORYTET 2: CZAS SPANIA (NOC) #}
@@ -151,19 +170,19 @@ action:
       # 3. Logika Decyzyjna ON/OFF z Histerezą
       target_hvac_mode: >
         {% if current_room_temp >= target_temp + histereza %}
-          {# WARUNEK WYŁĄCZENIA: Temperatura jest WYŻSZA niż Zadana + Histereza #}
+          {# WYŁĄCZENIE #}
           off
         
         {% elif current_room_temp <= target_temp - histereza %}
-          {# WARUNEK WŁĄCZENIA: Temperatura jest NIŻSZA niż Zadana - Histereza #}
+          {# WŁĄCZENIE #}
           heat
 
         {% elif trv_mode == 'heating' %}
-          {# KONTYNUACJA GRZANIA: Jesteśmy w marginesie, ale już grzejemy #}
+          {# KONTYNUACJA GRZANIA #}
           heat
         
         {% else %}
-          {# KONTYNUACJA WYŁĄCZENIA: Jesteśmy w marginesie i nie grzejemy #}
+          {# KONTYNUACJA WYŁĄCZENIA #}
           off
         {% endif %}
       
