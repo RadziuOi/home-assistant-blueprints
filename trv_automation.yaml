@@ -74,7 +74,7 @@ blueprint:
           unit_of_measurement: °C
           step: 0.1
 
-    # WEJŚCIA CZASOWE
+    # WEJŚCIA CZASOWE (WSZYSTKIE OBOWIĄZKOWE)
     time_sleep:
       name: A. Godzina Rozpoczęcia Nocy
       description: np. 23:00
@@ -92,11 +92,9 @@ blueprint:
       description: np. 16:00
       selector: {time: }
     time_boost:
-      name: E. Godzina Rozpoczęcia Boost (Opcjonalnie)
-      description: Godzina włączenia Boost (np. 06:30). Pozostaw puste, jeśli Boost nie jest potrzebny.
-      default: "" # Domyślna pusta wartość
-      selector: 
-        time:
+      name: E. Godzina Rozpoczęcia Boost (Wymagane)
+      description: Godzina włączenia Boost (np. 06:30). Wymagane, nawet jeśli Boost nie jest używany.
+      selector: {time: }
     boost_duration:
       name: F. Czas Trwania Boost (minuty)
       description: Jak długo ma trwać Boost (np. 30 minut).
@@ -132,7 +130,7 @@ trigger:
     entity_id: !input person_1_entity
   - platform: state
     entity_id: !input person_2_entity
-  # 2. Wyzwalanie w kluczowych godzinach (4 punkty harmonogramu)
+  # 2. Wyzwalanie w kluczowych godzinach (4 punkty harmonogramu + Boost)
   - platform: time
     at: !input time_sleep
   - platform: time
@@ -141,11 +139,8 @@ trigger:
     at: !input time_midday_start
   - platform: time
     at: !input time_midday_end
-  # Opcjonalny trigger Boost, aktywowany tylko jeśli podano czas
   - platform: time
     at: !input time_boost
-    id: time_boost_trigger
-    enabled: "{{ input_boost is defined and input_boost != '' }}" # Użycie warunku do włączenia/wyłączenia triggera
   # 3. Zmiana temperatury z czujnika (dla szybkiej reakcji ON/OFF i przegrzania)
   - platform: state
     entity_id: !input room_sensor
@@ -174,18 +169,10 @@ action:
 
       # Logika Boost (Aktywna tylko, gdy jesteś w domu)
       is_boost_time: >
-        {# Sprawdzenie, czy pole time_boost_str JEST UŻYWANE (nie jest puste) #}
-        {% if time_boost_str != '' %}
-          {% set now_dt = now() %}
-          {# Musimy użyć 'today_at' dla konwersji, jeśli pole nie jest puste #}
-          {% set boost_start = today_at(time_boost_str) %} 
-          {% set boost_end = boost_start + timedelta(minutes=boost_duration_min | int) %}
-          {# BOOST jest aktywny TYLKO gdy jesteś w domu i w przedziale czasowym #}
-          {{ is_home and now_dt >= boost_start and now_dt < boost_end }}
-        {% else %}
-          {# Jeśli pole jest puste, Boost jest zawsze nieaktywny #}
-          false
-        {% endif %}
+        {% set now_dt = now() %}
+        {% set boost_start = today_at(time_boost_str) %}
+        {% set boost_end = boost_start + timedelta(minutes=boost_duration_min | int) %}
+        {{ is_home and now_dt >= boost_start and now_dt < boost_end }}
       
       # Logika Czasowa (Spanie):
       is_sleep_time: >
