@@ -1,6 +1,6 @@
 blueprint:
   name: Termostat 3 Strefy Czasowe + Obecność (ON/OFF)
-  description: Ustawia tryb TRV na HEAT/OFF na podstawie zewnętrznego czujnika, 3 harmonogramów czasowych i obecności CO NAJMNIEJ JEDNEJ osoby.
+  description: Ustawia tryb TRV na HEAT/OFF na podstawie zewnętrznego czujnika, 3 harmonogramów, obecności (LUB) oraz zabezpieczenia przed przegrzaniem.
   domain: automation
   input:
     trv_target:
@@ -49,6 +49,12 @@ blueprint:
       default: 16.0
       selector:
         number: {min: 10, max: 30, unit_of_measurement: "°C", step: 0.5}
+    temp_max_limit:
+      name: 5. Temperatura Maksymalna (Zabezpieczenie)
+      description: Temperatura, powyżej której TRV zostanie natychmiast wyłączony (np. 24.0°C).
+      default: 24.0
+      selector:
+        number: {min: 15, max: 35, unit_of_measurement: "°C", step: 0.5}
     
     # WEJŚCIE Histereza
     histeresis:
@@ -95,6 +101,7 @@ variables:
   input_sleep_temp: !input temp_sleep
   input_midday_away_temp: !input temp_midday_away
   input_away_temp: !input temp_away
+  input_max_temp: !input temp_max_limit # NOWY INPUT
   histereza: !input histeresis
 
 
@@ -114,7 +121,7 @@ trigger:
     at: !input time_midday_start
   - platform: time
     at: !input time_midday_end
-  # 4. Zmiana temperatury z czujnika (dla szybkiej reakcji ON/OFF)
+  # 4. Zmiana temperatury z czujnika (dla szybkiej reakcji ON/OFF i przegrzania)
   - platform: state
     entity_id: !input room_sensor
 
@@ -128,7 +135,7 @@ action:
       midday_start: "{{ as_datetime(time_midday_start_str).time() }}"
       midday_end: "{{ as_datetime(time_midday_end_str).time() }}"
 
-      # KLUCZOWA LOGIKA OBECNOŚCI: LUB (OR)
+      # Logika obecności: Prawda, gdy CO NAJMNIEJ JEDNA osoba jest w domu
       is_home: >
         {% set person_1_home = is_state(input_person_1, 'home') %}
         {% set person_2_home = is_state(input_person_2, 'home') %}
@@ -136,6 +143,9 @@ action:
         
       current_room_temp: "{{ states(input_room_sensor) | float(20.0) }}"
       trv_mode: "{{ state_attr(input_trv, 'hvac_action') }}"
+      
+      # Zabezpieczenie przed przegrzaniem (PRIORYTET 0)
+      is_overheating: "{{ current_room_temp >= input_max_temp }}"
       
       # Logika Czasowa (gdy JESTEŚMY w domu):
       is_sleep_time: >
@@ -148,7 +158,7 @@ action:
         {% endif %}
 
       is_midday_time: >
-        {# Czas oszczędności w środku dnia, np. 08:00 do 16:00 #}
+        {# Czas oszczędności w środku dnia #}
         {{ now_time >= midday_start and now_time < midday_end }}
         
       # 2. Obliczanie docelowej temperatury (Referencyjnej)
@@ -167,9 +177,13 @@ action:
           {{ states(input_comfort_temp) | float(21.0) }}
         {% endif %}
 
-      # 3. Logika Decyzyjna ON/OFF z Histerezą
+      # 3. Logika Decyzyjna ON/OFF z Histerezą i ZABEZPIECZENIEM
       target_hvac_mode: >
-        {% if current_room_temp >= target_temp + histereza %}
+        {% if is_overheating %}
+          {# PRIORYTET 0: WYŁĄCZ W PRZYPADKU PRZEGRZANIA #}
+          off
+        
+        {% elif current_room_temp >= target_temp + histereza %}
           {# WYŁĄCZENIE #}
           off
         
