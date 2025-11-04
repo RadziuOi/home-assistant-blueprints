@@ -96,7 +96,7 @@ blueprint:
       description: Godzina włączenia Boost (np. 06:30). Pozostaw puste, jeśli Boost nie jest potrzebny.
       selector: 
         time:
-      nullable: true # KLUCZOWA ZMIANA
+      nullable: true # TUTAJ POWINNO BYĆ!
     boost_duration:
       name: F. Czas Trwania Boost (minuty)
       description: Jak długo ma trwać Boost (np. 30 minut).
@@ -141,10 +141,6 @@ trigger:
     at: !input time_midday_start
   - platform: time
     at: !input time_midday_end
-  # UWAGA: Usunięto time_boost z triggerów, aby nie powodował błędu, gdy jest pusty. 
-  # Logika jest wyzwalana przez zmianę temperatury lub inne czasy.
-  # Jeśli Boost jest używany, zaleca się ręczne wyzwolenie automatyzacji o czasie startu Boost.
-  # Najbezpieczniej zostawić time_boost:
   - platform: time
     at: !input time_boost
   # 3. Zmiana temperatury z czujnika (dla szybkiej reakcji ON/OFF i przegrzania)
@@ -176,7 +172,7 @@ action:
       # Logika Boost (Aktywna tylko, gdy jesteś w domu)
       is_boost_time: >
         {% set time_boost_input = states(time_boost_str) %}
-        {# Sprawdzenie, czy pole time_boost_str JEST UŻYWANE #}
+        {# Sprawdzenie, czy pole time_boost_str JEST UŻYWANE (nie jest puste) #}
         {% if time_boost_input is not none and time_boost_input not in ['unavailable', 'unknown'] %}
           {% set now_dt = now() %}
           {# Używamy time_boost_input bezpośrednio #}
@@ -185,7 +181,7 @@ action:
           {# BOOST jest aktywny TYLKO gdy jesteś w domu i w przedziale czasowym #}
           {{ is_home and now_dt >= boost_start and now_dt < boost_end }}
         {% else %}
-          {# Jeśli pole time_boost jest puste, Boost jest zawsze nieaktywny #}
+          {# Jeśli pole time_boost jest puste (brak wartości), Boost jest zawsze nieaktywny #}
           false
         {% endif %}
       
@@ -198,59 +194,4 @@ action:
         {% endif %}
 
       # Logika Czasowa (Oszczędność w dzień):
-      is_midday_time: "{{ now_time >= midday_start and now_time < midday_end }}"
-        
-      # 2. Obliczanie docelowej temperatury (Referencyjnej)
-      target_temp: >
-        {% if is_boost_time %}
-          {# PRIORYTET 1: BOOST #}
-          {{ states(input_boost_temp) | float(23.0) }}
-        {% elif not is_home %}
-          {# PRIORYTET 2: JESTEŚMY POZA DOMEM (OBU) #}
-          {{ states(input_away_temp) | float(16.0) }}
-        {% elif is_sleep_time %}
-          {# PRIORYTET 3: CZAS SPANIA (NOC) #}
-          {{ states(input_sleep_temp) | float(19.0) }}
-        {% elif is_midday_time %}
-          {# PRIORYTET 4: CZAS OSZCZĘDNOŚCI W ŚRODKU DNIA #}
-          {{ states(input_midday_away_temp) | float(18.0) }}
-        {% else %}
-          {# PRIORYTET 5: CZAS KOMFORTU #}
-          {{ states(input_comfort_temp) | float(21.0) }}
-        {% endif %}
-
-      # 3. Logika Decyzyjna ON/OFF z Histerezą i ZABEZPIECZENIEM
-      target_hvac_mode: >
-        {% if is_overheating %}
-          {# PRIORYTET 0: WYŁĄCZ W PRZYPADKU PRZEGRZANIA #}
-          off
-        
-        {% elif current_room_temp >= target_temp + histereza %}
-          {# WYŁĄCZENIE (powyżej zadanej + margines) #}
-          off
-        
-        {% elif current_room_temp <= target_temp - histereza %}
-          {# WŁĄCZENIE (poniżej zadanej - margines) #}
-          heat
-
-        {% elif trv_mode == 'heating' %}
-          {# KONTYNUACJA GRZANIA (w marginesie) #}
-          heat
-        
-        {% else %}
-          {# KONTYNUACJA WYŁĄCZENIA (w marginesie) #}
-          off
-        {% endif %}
-      
-  # 4. Akcje (Ustawienie trybu i temperatury referencyjnej)
-  - service: climate.set_hvac_mode
-    target:
-      entity_id: "{{ input_trv }}"
-    data:
-      hvac_mode: "{{ target_hvac_mode }}"
-
-  - service: climate.set_temperature
-    target:
-      entity_id: "{{ input_trv }}"
-    data:
-      temperature: "{{ target_temp }}"
+      is_midday_time:
