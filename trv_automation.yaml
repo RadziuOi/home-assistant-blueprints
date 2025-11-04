@@ -1,14 +1,23 @@
 blueprint:
-  name: Termostat 3 Strefy Czasowe + Obecność
-  description: Dynamiczne ustawianie temperatury TRV zależne od 3 harmonogramów czasowych i obecności.
+  name: Termostat 3 Strefy Czasowe + Obecność (ON/OFF)
+  description: Ustawia tryb TRV na HEAT/OFF na podstawie zewnętrznego czujnika, 3 harmonogramów czasowych i obecności.
   domain: automation
   input:
     trv_target:
       name: Głowica TRV (Climate)
       selector:
         entity: {domain: climate, multiple: false}
+    room_sensor:
+      name: Zewnętrzny Czujnik Temperatury (Wygładzony)
+      description: Encja czujnika używana do odczytu temperatury w pomieszczeniu (zalecany filtr Moving Average).
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+          multiple: false
     presence_entity:
       name: Encja Obecności
+      description: Encja śledząca obecność (np. group.domownicy, home/not_home).
       selector:
         entity: {domain: [person, group, binary_sensor]}
     
@@ -33,6 +42,18 @@ blueprint:
       default: 16.0
       selector:
         number: {min: 10, max: 30, unit_of_measurement: "°C", step: 0.5}
+    
+    # WEJŚCIE Histereza
+    histeresis:
+      name: Histereza (°C)
+      description: Margines tolerancji dla trybu ON/OFF, np. 0.2°C. Zapobiega migotaniu zaworu.
+      default: 0.2
+      selector:
+        number:
+          min: 0.1
+          max: 1.0
+          unit_of_measurement: °C
+          step: 0.1
 
     # WEJŚCIA CZASOWE
     time_sleep:
@@ -56,11 +77,18 @@ mode: queued
 
 variables:
   input_trv: !input trv_target
+  input_room_sensor: !input room_sensor
   input_presence: !input presence_entity
   time_sleep_str: !input time_sleep
   time_wake_str: !input time_wake
   time_midday_start_str: !input time_midday_start
   time_midday_end_str: !input time_midday_end
+  input_comfort_temp: !input temp_comfort
+  input_sleep_temp: !input temp_sleep
+  input_midday_away_temp: !input temp_midday_away
+  input_away_temp: !input temp_away
+  histereza: !input histeresis
+
 
 trigger:
   # 1. Zmiana statusu obecności
@@ -75,11 +103,14 @@ trigger:
     at: !input time_midday_start
   - platform: time
     at: !input time_midday_end
+  # 3. Zmiana temperatury z czujnika (dla szybkiej reakcji ON/OFF)
+  - platform: state
+    entity_id: !input room_sensor
+
 
 action:
   # 1. Definiowanie zmiennych czasowych i logiki przedziałów
   - variables:
-      # Parsowanie czasów z selektorów
       now_time: "{{ now().time() }}"
       sleep_time: "{{ as_datetime(time_sleep_str).time() }}"
       wake_time: "{{ as_datetime(time_wake_str).time() }}"
@@ -87,22 +118,21 @@ action:
       midday_end: "{{ as_datetime(time_midday_end_str).time() }}"
 
       is_home: "{{ is_state(input_presence, 'home') }}"
+      current_room_temp: "{{ states(input_room_sensor) | float(20.0) }}"
+      trv_mode: "{{ state_attr(input_trv, 'hvac_action') }}"
       
       # Logika Czasowa (gdy JESTEŚMY w domu):
       is_sleep_time: >
         {% if sleep_time > wake_time %}
-          {# Przez noc, np. 23:00 do 07:00 #}
           {{ now_time >= sleep_time or now_time < wake_time }}
         {% else %}
-          {# W ciągu dnia, np. 07:00 do 23:00 #}
           {{ now_time >= sleep_time and now_time < wake_time }}
         {% endif %}
 
       is_midday_time: >
-        {# Czas oszczędności w środku dnia, np. 08:00 do 16:00 #}
         {{ now_time >= midday_start and now_time < midday_end }}
         
-      # 2. Obliczanie docelowej temperatury (priorytety: 1. AWAY, 2. SPANIE, 3. Oszczędność, 4. KOMFORT)
+      # 2. Obliczanie docelowej temperatury (Referencyjnej)
       target_temp: >
         {% if not is_home %}
           {# PRIORYTET 1: JESTEŚMY POZA DOMEM #}
@@ -117,15 +147,33 @@ action:
           {# PRIORYTET 4: CZAS KOMFORTU (Wszystko inne) #}
           {{ states(input_comfort_temp) | float(21.0) }}
         {% endif %}
+
+      # 3. Logika Decyzyjna ON/OFF z Histerezą
+      target_hvac_mode: >
+        {% if current_room_temp >= target_temp + histereza %}
+          {# WARUNEK WYŁĄCZENIA: Temperatura jest WYŻSZA niż Zadana + Histereza #}
+          off
+        
+        {% elif current_room_temp <= target_temp - histereza %}
+          {# WARUNEK WŁĄCZENIA: Temperatura jest NIŻSZA niż Zadana - Histereza #}
+          heat
+
+        {% elif trv_mode == 'heating' %}
+          {# KONTYNUACJA GRZANIA: Jesteśmy w marginesie, ale już grzejemy #}
+          heat
+        
+        {% else %}
+          {# KONTYNUACJA WYŁĄCZENIA: Jesteśmy w marginesie i nie grzejemy #}
+          off
+        {% endif %}
       
-      # Przypisanie inputów number dla łatwości odczytu w logice
-      input_comfort_temp: !input temp_comfort
-      input_sleep_temp: !input temp_sleep
-      input_midday_away_temp: !input temp_midday_away
-      input_away_temp: !input temp_away
+  # 4. Akcje (Ustawienie trybu i temperatury referencyjnej)
+  - service: climate.set_hvac_mode
+    target:
+      entity_id: "{{ input_trv }}"
+    data:
+      hvac_mode: "{{ target_hvac_mode }}"
 
-
-  # 3. Ustawienie temperatury dla TRV
   - service: climate.set_temperature
     target:
       entity_id: "{{ input_trv }}"
