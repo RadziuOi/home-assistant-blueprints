@@ -1,15 +1,15 @@
 blueprint:
-  name: Termostat Minimalny Stabilny (T_Dzień/Noc/Away)
-  description: Kontrola TRV oparta na Twojej stabilnej logice: Dzień/Noc/Away i ścisłej histerezie ON/OFF (0.1°C).
+  name: Termostat Minimalny Stabilny T_Dzien_Noc_Away
+  description: Kontrola TRV oparta na Twojej stabilnej logice Dzien/Noc/Away i scislej histerezie ON/OFF 0.1C.
   domain: automation
   input:
     trv_target:
-      name: Głowica TRV (Climate)
+      name: Glowica TRV (Climate)
       selector:
         entity: {domain: climate, multiple: false}
     room_sensor:
-      name: Zewnętrzny Czujnik Temperatury
-      description: Encja czujnika używana do odczytu temperatury w pomieszczeniu.
+      name: Zewnetrzny Czujnik Temperatury
+      description: Encja czujnika uzywana do odczytu temperatury w pomieszczeniu.
       selector:
         entity:
           domain: sensor
@@ -17,16 +17,16 @@ blueprint:
           multiple: false
     
     person_1_entity:
-      name: Encja Obecności - Osoba 1
+      name: Encja Obecnosci - Osoba 1
       selector:
         entity: {domain: [person, device_tracker]}
     person_2_entity:
-      name: Encja Obecności - Osoba 2
+      name: Encja Obecnosci - Osoba 2
       selector:
         entity: {domain: [person, device_tracker]}
     
     temp_comfort:
-      name: Temperatura Komfortowa (DZIEŃ)
+      name: Temperatura Komfortowa (DZIEN)
       default: 21.0
       selector:
         number: {min: 15, max: 30, unit_of_measurement: "°C", step: 0.5}
@@ -37,8 +37,8 @@ blueprint:
         number: {min: 10, max: 25, unit_of_measurement: "°C", step: 0.5}
     
     histeresis:
-      name: Histereza (°C)
-      description: Margines tolerancji (np. 0.1°C).
+      name: Histereza (C)
+      description: Margines tolerancji (np. 0.1C).
       default: 0.1
       selector:
         number:
@@ -48,11 +48,11 @@ blueprint:
           step: 0.1
 
     time_sleep:
-      name: Godzina Rozpoczęcia Nocy
+      name: Godzina Rozpoczecia Nocy
       description: np. 21:00
       selector: {time: }
     time_wake:
-      name: Godzina Zakończenia Nocy
+      name: Godzina Zakonczenia Nocy
       description: np. 07:00
       selector: {time: }
 
