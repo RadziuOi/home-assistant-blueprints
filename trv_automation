@@ -1,0 +1,133 @@
+blueprint:
+  name: Termostat 3 Strefy Czasowe + Obecność
+  description: Dynamiczne ustawianie temperatury TRV zależne od 3 harmonogramów czasowych i obecności.
+  domain: automation
+  input:
+    trv_target:
+      name: Głowica TRV (Climate)
+      selector:
+        entity: {domain: climate, multiple: false}
+    presence_entity:
+      name: Encja Obecności
+      selector:
+        entity: {domain: [person, group, binary_sensor]}
+    
+    # WEJŚCIA TEMPERATURY
+    temp_comfort:
+      name: 1. Temperatura Komfortowa (DZIEŃ)
+      default: 21.0
+      selector:
+        number: {min: 10, max: 30, unit_of_measurement: "°C", step: 0.5}
+    temp_sleep:
+      name: 2. Temperatura Nocna (SPANIE)
+      default: 19.0
+      selector:
+        number: {min: 10, max: 30, unit_of_measurement: "°C", step: 0.5}
+    temp_midday_away:
+      name: 3. Temperatura Oszczędność (ŚRODEK DNIA)
+      default: 18.0
+      selector:
+        number: {min: 10, max: 30, unit_of_measurement: "°C", step: 0.5}
+    temp_away:
+      name: 4. Temperatura Poza Domem (AWAY)
+      default: 16.0
+      selector:
+        number: {min: 10, max: 30, unit_of_measurement: "°C", step: 0.5}
+
+    # WEJŚCIA CZASOWE
+    time_sleep:
+      name: A. Godzina Rozpoczęcia Nocy
+      description: np. 23:00
+      selector: {time: }
+    time_wake:
+      name: B. Godzina Zakończenia Nocy
+      description: np. 07:00
+      selector: {time: }
+    time_midday_start:
+      name: C. Godzina Rozpoczęcia Oszczędności (Środek Dnia)
+      description: np. 08:00
+      selector: {time: }
+    time_midday_end:
+      name: D. Godzina Zakończenia Oszczędności (Środek Dnia)
+      description: np. 16:00
+      selector: {time: }
+
+mode: queued
+
+variables:
+  input_trv: !input trv_target
+  input_presence: !input presence_entity
+  time_sleep_str: !input time_sleep
+  time_wake_str: !input time_wake
+  time_midday_start_str: !input time_midday_start
+  time_midday_end_str: !input time_midday_end
+
+trigger:
+  # 1. Zmiana statusu obecności
+  - platform: state
+    entity_id: !input presence_entity
+  # 2. Wyzwalanie w kluczowych godzinach (4 punkty przełączania)
+  - platform: time
+    at: !input time_sleep
+  - platform: time
+    at: !input time_wake
+  - platform: time
+    at: !input time_midday_start
+  - platform: time
+    at: !input time_midday_end
+
+action:
+  # 1. Definiowanie zmiennych czasowych i logiki przedziałów
+  - variables:
+      # Parsowanie czasów z selektorów
+      now_time: "{{ now().time() }}"
+      sleep_time: "{{ as_datetime(time_sleep_str).time() }}"
+      wake_time: "{{ as_datetime(time_wake_str).time() }}"
+      midday_start: "{{ as_datetime(time_midday_start_str).time() }}"
+      midday_end: "{{ as_datetime(time_midday_end_str).time() }}"
+
+      is_home: "{{ is_state(input_presence, 'home') }}"
+      
+      # Logika Czasowa (gdy JESTEŚMY w domu):
+      is_sleep_time: >
+        {% if sleep_time > wake_time %}
+          {# Przez noc, np. 23:00 do 07:00 #}
+          {{ now_time >= sleep_time or now_time < wake_time }}
+        {% else %}
+          {# W ciągu dnia, np. 07:00 do 23:00 #}
+          {{ now_time >= sleep_time and now_time < wake_time }}
+        {% endif %}
+
+      is_midday_time: >
+        {# Czas oszczędności w środku dnia, np. 08:00 do 16:00 #}
+        {{ now_time >= midday_start and now_time < midday_end }}
+        
+      # 2. Obliczanie docelowej temperatury (priorytety: 1. AWAY, 2. SPANIE, 3. Oszczędność, 4. KOMFORT)
+      target_temp: >
+        {% if not is_home %}
+          {# PRIORYTET 1: JESTEŚMY POZA DOMEM #}
+          {{ states(input_away_temp) | float(16.0) }}
+        {% elif is_sleep_time %}
+          {# PRIORYTET 2: CZAS SPANIA (NOC) #}
+          {{ states(input_sleep_temp) | float(19.0) }}
+        {% elif is_midday_time %}
+          {# PRIORYTET 3: CZAS OSZCZĘDNOŚCI W ŚRODKU DNIA #}
+          {{ states(input_midday_away_temp) | float(18.0) }}
+        {% else %}
+          {# PRIORYTET 4: CZAS KOMFORTU (Wszystko inne) #}
+          {{ states(input_comfort_temp) | float(21.0) }}
+        {% endif %}
+      
+      # Przypisanie inputów number dla łatwości odczytu w logice
+      input_comfort_temp: !input temp_comfort
+      input_sleep_temp: !input temp_sleep
+      input_midday_away_temp: !input temp_midday_away
+      input_away_temp: !input temp_away
+
+
+  # 3. Ustawienie temperatury dla TRV
+  - service: climate.set_temperature
+    target:
+      entity_id: "{{ input_trv }}"
+    data:
+      temperature: "{{ target_temp }}"
