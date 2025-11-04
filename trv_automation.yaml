@@ -1,6 +1,6 @@
 blueprint:
   name: Termostat 6 Stref Czasowych + Obecność (ON/OFF)
-  description: Zaawansowane sterowanie TRV na podstawie 3 harmonogramów + Boost, obecności LUB oraz zabezpieczenia przed przegrzaniem (ON/OFF z histerezą).
+  description: Zaawansowane sterowanie TRV na podstawie 3 harmonogramów + Boost, obecności LUB oraz zabezpieczenia przed przegrzaniem (ON/OFF z histerezą). Wzmocniona konwersja FLOAT dla stabilności.
   domain: automation
   input:
     trv_target:
@@ -46,7 +46,7 @@ blueprint:
         number: {min: 10, max: 30, unit_of_measurement: "°C", step: 0.5}
     temp_boost:
       name: 4. Temperatura Boost (Wzmocnienie)
-      description: Krótkotrwała podwyższona temperatura (np. rano w łazience).
+      description: Krótkotrwała podwyższona temperatura.
       default: 23.0
       selector:
         number: {min: 15, max: 35, unit_of_measurement: "°C", step: 0.5}
@@ -57,7 +57,7 @@ blueprint:
         number: {min: 10, max: 30, unit_of_measurement: "°C", step: 0.5}
     temp_max_limit:
       name: 6. Temperatura Maksymalna (Zabezpieczenie)
-      description: Temperatura, powyżej której TRV zostanie natychmiast wyłączony (np. 24.0°C).
+      description: Temperatura, powyżej której TRV zostanie natychmiast wyłączony.
       default: 24.0
       selector:
         number: {min: 15, max: 35, unit_of_measurement: "°C", step: 0.5}
@@ -65,7 +65,7 @@ blueprint:
     # WEJŚCIE Histereza
     histeresis:
       name: Histereza (°C)
-      description: Margines tolerancji dla trybu ON/OFF, np. 0.2°C.
+      description: Margines tolerancji dla trybu ON/OFF, np. 0.1°C.
       default: 0.2
       selector:
         number:
@@ -74,10 +74,10 @@ blueprint:
           unit_of_measurement: °C
           step: 0.1
 
-    # WEJŚCIA CZASOWE (WSZYSTKIE OBOWIĄZKOWE)
+    # WEJŚCIA CZASOWE
     time_sleep:
       name: A. Godzina Rozpoczęcia Nocy
-      description: np. 23:00
+      description: np. 21:00
       selector: {time: }
     time_wake:
       name: B. Godzina Zakończenia Nocy
@@ -93,7 +93,7 @@ blueprint:
       selector: {time: }
     time_boost:
       name: E. Godzina Rozpoczęcia Boost (Wymagane)
-      description: Godzina włączenia Boost (np. 06:30). Wymagane, nawet jeśli Boost nie jest używany.
+      description: Godzina włączenia Boost.
       selector: {time: }
     boost_duration:
       name: F. Czas Trwania Boost (minuty)
@@ -155,6 +155,7 @@ action:
       midday_start: "{{ as_datetime(time_midday_start_str).time() }}"
       midday_end: "{{ as_datetime(time_midday_end_str).time() }}"
       
+      # WZMOCNIONA KONWERSJA FLOAT
       current_room_temp: "{{ states(input_room_sensor) | float(20.0) }}"
       trv_mode: "{{ state_attr(input_trv, 'hvac_action') }}"
       
@@ -165,7 +166,7 @@ action:
         {{ person_1_home or person_2_home }}
       
       # Zabezpieczenie przed przegrzaniem (PRIORYTET 0)
-      is_overheating: "{{ current_room_temp >= input_max_temp }}"
+      is_overheating: "{{ current_room_temp >= input_max_temp | float(24.0) }}" # FLOAT
 
       # Logika Boost (Aktywna tylko, gdy jesteś w domu)
       is_boost_time: >
@@ -174,7 +175,7 @@ action:
         {% set boost_end = boost_start + timedelta(minutes=boost_duration_min | int) %}
         {{ is_home and now_dt >= boost_start and now_dt < boost_end }}
       
-      # Logika Czasowa (Spanie):
+      # Logika Czasowa (Spanie): POPRAWIONA LOGIKA PRZEŁOMU PÓŁNOCY
       is_sleep_time: >
         {% if sleep_time > wake_time %}
           {{ now_time >= sleep_time or now_time < wake_time }}
@@ -189,32 +190,35 @@ action:
       target_temp: >
         {% if is_boost_time %}
           {# PRIORYTET 1: BOOST #}
-          {{ states(input_boost_temp) | float(23.0) }}
+          {{ states(input_boost_temp) | float(23.0) }} # FLOAT
         {% elif not is_home %}
           {# PRIORYTET 2: JESTEŚMY POZA DOMEM (OBU) #}
-          {{ states(input_away_temp) | float(16.0) }}
+          {{ states(input_away_temp) | float(16.0) }} # FLOAT
         {% elif is_sleep_time %}
           {# PRIORYTET 3: CZAS SPANIA (NOC) #}
-          {{ states(input_sleep_temp) | float(19.0) }}
+          {{ states(input_sleep_temp) | float(19.0) }} # FLOAT
         {% elif is_midday_time %}
           {# PRIORYTET 4: CZAS OSZCZĘDNOŚCI W ŚRODKU DNIA #}
-          {{ states(input_midday_away_temp) | float(18.0) }}
+          {{ states(input_midday_away_temp) | float(18.0) }} # FLOAT
         {% else %}
           {# PRIORYTET 5: CZAS KOMFORTU #}
-          {{ states(input_comfort_temp) | float(21.0) }}
+          {{ states(input_comfort_temp) | float(21.0) }} # FLOAT
         {% endif %}
 
       # 3. Logika Decyzyjna ON/OFF z Histerezą i ZABEZPIECZENIEM
       target_hvac_mode: >
+        {% set histereza_float = histereza | float(0.2) %} # FLOAT TUTAJ
+        {% set target_temp_float = target_temp | float(21.0) %} # FLOAT TUTAJ
+        
         {% if is_overheating %}
           {# PRIORYTET 0: WYŁĄCZ W PRZYPADKU PRZEGRZANIA #}
           off
         
-        {% elif current_room_temp >= target_temp + histereza %}
+        {% elif current_room_temp >= target_temp_float + histereza_float %} 
           {# WYŁĄCZENIE (powyżej zadanej + margines) #}
           off
         
-        {% elif current_room_temp <= target_temp - histereza %}
+        {% elif current_room_temp <= target_temp_float - histereza_float %} 
           {# WŁĄCZENIE (poniżej zadanej - margines) #}
           heat
 
