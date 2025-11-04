@@ -92,9 +92,11 @@ blueprint:
       description: np. 16:00
       selector: {time: }
     time_boost:
-      name: E. Godzina Rozpoczęcia Boost
-      description: Godzina włączenia Boost (np. 06:30).
-      selector: {time: }
+      name: E. Godzina Rozpoczęcia Boost (Opcjonalnie)
+      description: Godzina włączenia Boost (np. 06:30). Pozostaw puste, jeśli Boost nie jest potrzebny.
+      selector: 
+        time:
+      nullable: true # KLUCZOWA ZMIANA
     boost_duration:
       name: F. Czas Trwania Boost (minuty)
       description: Jak długo ma trwać Boost (np. 30 minut).
@@ -139,6 +141,10 @@ trigger:
     at: !input time_midday_start
   - platform: time
     at: !input time_midday_end
+  # UWAGA: Usunięto time_boost z triggerów, aby nie powodował błędu, gdy jest pusty. 
+  # Logika jest wyzwalana przez zmianę temperatury lub inne czasy.
+  # Jeśli Boost jest używany, zaleca się ręczne wyzwolenie automatyzacji o czasie startu Boost.
+  # Najbezpieczniej zostawić time_boost:
   - platform: time
     at: !input time_boost
   # 3. Zmiana temperatury z czujnika (dla szybkiej reakcji ON/OFF i przegrzania)
@@ -169,10 +175,19 @@ action:
 
       # Logika Boost (Aktywna tylko, gdy jesteś w domu)
       is_boost_time: >
-        {% set now_dt = now() %}
-        {% set boost_start = today_at(time_boost_str) %}
-        {% set boost_end = boost_start + timedelta(minutes=boost_duration_min | int) %}
-        {{ is_home and now_dt >= boost_start and now_dt < boost_end }}
+        {% set time_boost_input = states(time_boost_str) %}
+        {# Sprawdzenie, czy pole time_boost_str JEST UŻYWANE #}
+        {% if time_boost_input is not none and time_boost_input not in ['unavailable', 'unknown'] %}
+          {% set now_dt = now() %}
+          {# Używamy time_boost_input bezpośrednio #}
+          {% set boost_start = today_at(time_boost_input) %} 
+          {% set boost_end = boost_start + timedelta(minutes=boost_duration_min | int) %}
+          {# BOOST jest aktywny TYLKO gdy jesteś w domu i w przedziale czasowym #}
+          {{ is_home and now_dt >= boost_start and now_dt < boost_end }}
+        {% else %}
+          {# Jeśli pole time_boost jest puste, Boost jest zawsze nieaktywny #}
+          false
+        {% endif %}
       
       # Logika Czasowa (Spanie):
       is_sleep_time: >
