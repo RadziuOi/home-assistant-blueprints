@@ -1,13 +1,13 @@
 blueprint:
-  name: Sterowanie ogrzewaniem (Smart Heating - Climate/TRV - Zaawansowana Obecność)
+  name: Sterowanie ogrzewaniem (Smart Heating - Climate/TRV - Lokalizacja Osób)
   description: |
     Automatyczne sterowanie Termostatycznym Zaworem Grzejnikowym (TRV) / Climate na podstawie:
       • Temperatury wewnętrznej (z histerezą),
       • Harmonogramu czasowego (docelowa temperatura),
-      • Obecności wielu osób w domu (tryb Dzień / Nieobecność).
+      • Obecności wielu osób w domu (sprawdzane na podstawie lokalizacji).
     
-    Jeśli którakolwiek z osób jest obecna, używany jest Harmonogram.
-    Jeśli wszystkie osoby są nieobecne, używana jest Temperatura Nieobecności.
+    Jeśli ktokolwiek (Tracker) jest w stanie 'home', używany jest Harmonogram.
+    Jeśli wszystkie osoby są 'not_home', używana jest Temperatura Nieobecności.
   domain: automation
   input:
     # Czujnik temperatury zewnętrznej
@@ -32,16 +32,16 @@ blueprint:
       description: Encja Climate, której tryb HVAC zostanie ustawiony (np. climate.trv_salon)
       selector:
         entity:
-          domain: climate # Jawne ograniczenie do termostatów/TRV
+          domain: climate 
 
-    # Lista sensorów obecności
+    # Lista trackerów lokalizacji
     presence_entities:
-      name: Sensory obecności osób
-      description: Lista binary sensorów (trackery), które decydują o tym, czy dom jest "używany".
+      name: Sensory/Trackery Lokalizacji Osób
+      description: Lista encji, które zwracają 'home' lub 'not_home' (np. person.janek, device_tracker.iphone_oli).
       selector:
         entity:
-          domain: binary_sensor
-          multiple: true # Umożliwia wybranie wielu encji
+          domain: [person, device_tracker] # Zmieniono na domeny lokalizacyjne
+          multiple: true 
 
     # Temperatura docelowa dla nieobecności
     away_temp:
@@ -109,10 +109,10 @@ action:
       int_temp: "{{ states(trigger.input.internal_temp_sensor) | float(0) }}"
       hysteresis: "{{ trigger.input.temperature_hysteresis | float(0) }}"
       
-      # Sprawdzenie, czy przynajmniej JEDNA osoba jest w domu
+      # ZOPTYMALIZOWANA LOGIKA: Sprawdzenie, czy przynajmniej JEDNA osoba jest w domu ('home')
       is_anyone_home: >-
         {% set presence_list = expand(trigger.input.presence_entities) | map(attribute='state') | list %}
-        {{ 'home' in presence_list or 'on' in presence_list }}
+        {{ 'home' in presence_list }} # Wystarczy, że którykolwiek tracker ma stan 'home'
       
       # Ustalenie docelowej temperatury: Harmonogram LUB Temperatura Nieobecności
       target_temp: >-
@@ -131,7 +131,7 @@ action:
 
   - alias: "Decyzja o włączeniu/wyłączeniu grzania (TRV/Climate)"
     choose:
-      # 1. Brak ustalonej temperatury (tylko w trybie Obecności, gdy jest luka w harmonogramie)
+      # 1. Brak ustalonej temperatury w harmonogramie (gdy jest luka)
       - conditions:
           - condition: template
             value_template: "{{ is_anyone_home and target_temp is none }}"
@@ -139,7 +139,7 @@ action:
           - service: logbook.log
             data:
               name: "Smart Heating"
-              message: "Brak ustalonej temperatury docelowej w harmonogramie dla aktualnego czasu. Bez zmian trybu HVAC."
+              message: "Brak ustalonej temperatury docelowej w harmonogramie. Bez zmian trybu HVAC."
               
       # 2. Gdy temperatura zewnętrzna jest powyżej limitu, WYŁĄCZ grzanie
       - conditions:
