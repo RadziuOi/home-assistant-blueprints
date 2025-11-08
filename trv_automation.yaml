@@ -1,16 +1,16 @@
 blueprint:
-  name: Sterowanie ogrzewaniem (Smart Heating)
+  name: Sterowanie ogrzewaniem (Smart Heating - Climate/TRV)
   description: |
-    Automatyczne sterowanie grzałką/klimatyzacją na podstawie:
+    Automatyczne sterowanie Termostatycznym Zaworem Grzejnikowym (TRV) / Climate na podstawie:
       • Temperatury zewnętrznego czujnika,
       • Harmonogramu czasowego (dzień / noc),
       • Obecności osób w domu.
     
     Wspiera:
       * Różne ustawienia temperatury w zależności od godziny
-      * Wyłączanie grzałki, gdy temperatura zewnętrzna jest już wysoka
-      * **Opcjonalna histereza (krok) przy zmianie temperatury,
-        aby uniknąć częstych cykli.**
+      * Wyłączanie grzania, gdy temperatura zewnętrzna jest już wysoka
+      * Opcjonalna histereza (krok) przy zmianie temperatury.
+    **UWAGA: Ten Blueprint steruje trybem HVAC (Heat/Off), a nie temperaturą docelową.**
   domain: automation
   input:
     # Czujnik temperatury zewnętrznej
@@ -21,21 +21,21 @@ blueprint:
         entity:
           domain: sensor
 
-    # Czujnik temperatury wewnętrznej (opcjonalny – można użyć do porównania)
+    # Czujnik temperatury wewnętrznej
     internal_temp_sensor:
-      name: Temperatura wewnętrzna (opcjonalna)
+      name: Temperatura wewnętrzna
       description: Sensor temperatury pomieszczenia, który ma być kontrolowany
       selector:
         entity:
           domain: sensor
-      default: ""
 
-    # Grzałka / klimatyzacja do sterowania
+    # TRV / Termostat do sterowania (KLUCZOWA ZMIANA: domena climate)
     heating_entity:
-      name: Grzałka/klimatyzacja
-      description: Entity (switch / climate) które zostanie włączone/wyłączone
+      name: TRV / Termostat (Encja Climate)
+      description: Encja Climate, której tryb HVAC zostanie ustawiony (np. climate.trv_salon)
       selector:
         entity:
+          domain: climate # Jawne ograniczenie do termostatów/TRV
 
     # Czy w domu jest ktoś?
     presence_sensor:
@@ -60,15 +60,12 @@ blueprint:
       name: Harmonogram temperatury
       description: |
         Lista wpisów z czasem, dniami oraz temperaturą.
-        Format JSON (np. podaj w UI jako listę dictów):
-          [
-            {"start":"06:00","end":"09:00","temp":21,"days":["mon","tue","wed","thu","fri"]},
-            ...
-          ]
+        Wartości z "temp" będą służyły jako docelowe, wokół których
+        będzie liczona histereza.
       selector:
         object:
 
-    # Temperatura maksymalna zewnętrzna, po której grzałka wyłączona (bezpiecznik)
+    # Temperatura maksymalna zewnętrzna, po której grzanie wyłączone (bezpiecznik)
     max_external_temp:
       name: Maksymalna temperatura zewnętrzna
       default: 25
@@ -76,12 +73,12 @@ blueprint:
         number:
           unit_of_measurement: °C
     
-    # NOWY PARAMETR: Histereza temperatury (krok)
+    # Histereza temperatury (krok)
     temperature_hysteresis:
       name: Histereza temperatury (krok)
       description: |
-        Margines (np. 0.5 °C) zapobiegający częstemu włączaniu/wyłączaniu
-        grzałki wokół temperatury docelowej.
+        Margines (np. 0.5 °C) zapobiegający częstemu przełączaniu trybu HVAC
+        wokół temperatury docelowej.
       default: 0.0
       selector:
         number:
@@ -101,14 +98,8 @@ action:
     variables:
       now_time: "{{ now().time() }}"
       weekday: "{{ now().strftime('%a').lower() }}"    # mon, tue, ...
-      # POPRAWKA: Używamy states() zamiast state_attr(..., 'temperature')
       ext_temp: "{{ states(trigger.input.external_temp_sensor) | float(0) }}"
-      int_temp: >-
-        {% if trigger.input.internal_temp_sensor %}
-          {{ states(trigger.input.internal_temp_sensor) | float(0) }}
-        {% else %}
-          null
-        {% endif %}
+      int_temp: "{{ states(trigger.input.internal_temp_sensor) | float(0) }}"
       presence: "{{ is_state(trigger.input.presence_sensor, 'on') }}"
       hysteresis: "{{ trigger.input.temperature_hysteresis | float(0) }}"
 
@@ -126,84 +117,94 @@ action:
         {%- if entries|length == 0 %}null{%- endif %}
       target_temp: "{{ (target_temp_entry | default({}))['temp'] | default(null) }}"
 
-  - alias: "Decyzja o włączeniu/wyłączeniu grzałki"
+  - alias: "Decyzja o włączeniu/wyłączeniu grzania (TRV/Climate)"
     choose:
-      # Gdy temperatura zewnętrzna jest powyżej limitu, wyłącz wszystko
+      # 1. Gdy temperatura zewnętrzna jest powyżej limitu, WYŁĄCZ grzanie
       - conditions:
           - condition: numeric_state
             entity_id: "{{ trigger.input.external_temp_sensor }}"
             above: "{{ trigger.input.max_external_temp }}"
         sequence:
-          - service: homeassistant.turn_off
+          # Użycie usługi climate.set_hvac_mode: 'off'
+          - service: climate.set_hvac_mode
             target:
               entity_id: "{{ trigger.input.heating_entity }}"
+            data:
+              hvac_mode: 'off'
           - service: logbook.log
             data:
               name: "Smart Heating"
               message: |
-                Zewnętrzna temperatura {{ ext_temp }}°C przekracza limit
-                ({{ trigger.input.max_external_temp }}°C). Grzałka wyłączona.
+                Zewnętrzna temperatura {{ ext_temp }}°C przekracza limit. TRV wyłączony (Off).
 
-      # Gdy nie ma osoby w domu, ZAWSZE włącz (można to ulepszyć w przyszłości)
+      # 2. Gdy nie ma osoby w domu, ZAWSZE WŁĄCZ (możesz tu ustawić minimalną temp.)
       - conditions:
           - condition: template
             value_template: "{{ not presence }}"
         sequence:
-          - service: homeassistant.turn_on
+          # Użycie usługi climate.set_hvac_mode: 'heat'
+          - service: climate.set_hvac_mode
             target:
               entity_id: "{{ trigger.input.heating_entity }}"
+            data:
+              hvac_mode: heat 
           - service: logbook.log
             data:
               name: "Smart Heating"
               message: |
-                Nie ma nikogo w domu – grzałka pozostaje włączona (tryb nieobecności).
+                Nie ma nikogo w domu – TRV włączony (Heat/Auto) (tryb nieobecności).
 
-      # Standardowa reguła: włącz/wyłącz na podstawie temperatury wewnętrznej i harmonogramu
+      # 3. Standardowa reguła: włącz/wyłącz na podstawie temperatury wewnętrznej i harmonogramu
       - conditions:
           - condition: template
             value_template: "{{ presence and target_temp is not none }}"
         sequence:
           - alias: "Porównaj z aktualną temperaturą (z histerezą)"
             choose:
-              # Warunek włączenia: Temp wew. < (Docelowa - Histereza)
+              # Włączenie grzania: Temp wew. < (Docelowa - Histereza)
               - conditions:
                   - condition: numeric_state
                     entity_id: "{{ trigger.input.internal_temp_sensor }}"
                     below: "{{ target_temp | float(0) - hysteresis }}"
                 sequence:
-                  - service: homeassistant.turn_on
+                  # Użycie usługi climate.set_hvac_mode: 'heat'
+                  - service: climate.set_hvac_mode
                     target:
                       entity_id: "{{ trigger.input.heating_entity }}"
+                    data:
+                      hvac_mode: heat
                   - service: logbook.log
                     data:
                       name: "Smart Heating"
                       message: |
-                        Włączam grzałkę. Temp wew. {{ int_temp }}°C < min. {{ target_temp | float(0) - hysteresis }}°C.
+                        WŁĄCZAM TRV. Temp wew. {{ int_temp }}°C < min. {{ target_temp | float(0) - hysteresis }}°C.
                         (Docelowa: {{ target_temp }}°C, Histereza: {{ hysteresis }}°C)
               
-              # Warunek wyłączenia: Temp wew. >= Docelowa
+              # Wyłączenie grzania: Temp wew. >= Docelowa
               - conditions:
                   - condition: numeric_state
                     entity_id: "{{ trigger.input.internal_temp_sensor }}"
                     above_or_equal: "{{ target_temp | float(0) }}"
                 sequence:
-                  - service: homeassistant.turn_off
+                  # Użycie usługi climate.set_hvac_mode: 'off'
+                  - service: climate.set_hvac_mode
                     target:
                       entity_id: "{{ trigger.input.heating_entity }}"
+                    data:
+                      hvac_mode: 'off'
                   - service: logbook.log
                     data:
                       name: "Smart Heating"
                       message: |
-                        Wyłączam grzałkę. Temp wew. {{ int_temp }}°C >= docelowa {{ target_temp }}°C.
+                        WYŁĄCZAM TRV. Temp wew. {{ int_temp }}°C >= docelowa {{ target_temp }}°C.
             default:
               - service: logbook.log
                 data:
                   name: "Smart Heating"
-                  message: |
-                    Temperatura jest w zakresie histerezy ({{ target_temp | float(0) - hysteresis }}°C - {{ target_temp }}°C). Bez zmian.
+                  message: "Temperatura jest w zakresie histerezy. Bez zmian trybu HVAC."
 
     default:
       - service: logbook.log
         data:
           name: "Smart Heating"
-          message: "Brak ustalonej temperatury docelowej dla aktualnego czasu/dnia."
+          message: "Brak ustalonej temperatury docelowej. TRV pozostaje bez zmian."
