@@ -1,156 +1,209 @@
 blueprint:
-  name: Termostat Minimalny Stabilny T Dzien Noc Away
-  description: Kontrola TRV oparta na Twojej stabilnej logice Dzien Noc Away i scislej histerezie ON/OFF 0.1C.
+  name: Sterowanie ogrzewaniem (Smart Heating)
+  description: |
+    Automatyczne sterowanie grzałką/klimatyzacją na podstawie:
+      • Temperatury zewnętrznego czujnika,
+      • Harmonogramu czasowego (dzień / noc),
+      • Obecności osób w domu.
+    
+    Wspiera:
+      * Różne ustawienia temperatury w zależności od godziny
+      * Wyłączanie grzałki, gdy temperatura zewnętrzna jest już wysoka
+      * **Opcjonalna histereza (krok) przy zmianie temperatury,
+        aby uniknąć częstych cykli.**
   domain: automation
   input:
-    trv_target:
-      name: Glowica TRV Climate
-      selector:
-        entity: {domain: climate, multiple: false}
-    room_sensor:
-      name: Zewnetrzny Czujnik Temperatury
-      description: Encja czujnika uzywana do odczytu temperatury w pomieszczeniu.
+    # Czujnik temperatury zewnętrznej
+    external_temp_sensor:
+      name: Temperatura zewnętrzna
+      description: Sensor typu temperature
       selector:
         entity:
           domain: sensor
-          device_class: temperature
-          multiple: false
-    
-    person_1_entity:
-      name: Encja Obecnosci Osoba 1
+
+    # Czujnik temperatury wewnętrznej (opcjonalny – można użyć do porównania)
+    internal_temp_sensor:
+      name: Temperatura wewnętrzna (opcjonalna)
+      description: Sensor temperatury pomieszczenia, który ma być kontrolowany
       selector:
-        entity: {domain: [person, device_tracker]}
-    person_2_entity:
-      name: Encja Obecnosci Osoba 2
+        entity:
+          domain: sensor
+      default: ""
+
+    # Grzałka / klimatyzacja do sterowania
+    heating_entity:
+      name: Grzałka/klimatyzacja
+      description: Entity (switch / climate) które zostanie włączone/wyłączone
       selector:
-        entity: {domain: [person, device_tracker]}
-    
-    temp_comfort:
-      name: Temperatura Komfortowa DZIEN
-      default: 21.0
+        entity:
+
+    # Czy w domu jest ktoś?
+    presence_sensor:
+      name: Sensor obecności
+      description: Binary sensor, który zwraca „on” gdy ktoś jest w domu
       selector:
-        number: {min: 15, max: 30, unit_of_measurement: "°C", step: 0.5}
-    temp_sleep_away:
-      name: Temperatura Nocna / Poza Domem
-      default: 19.0
-      selector:
-        number: {min: 10, max: 25, unit_of_measurement: "°C", step: 0.5}
-    
-    histeresis:
-      name: Histereza C
-      description: Margines tolerancji np. 0.1C.
-      default: 0.1
+        entity:
+          domain: binary_sensor
+
+    # Częstotliwość sprawdzania (sekundy)
+    check_interval:
+      name: Interwał sprawdzania (s)
+      default: 60
       selector:
         number:
-          min: 0.1
-          max: 1.0
+          min: 10
+          max: 3600
+          unit_of_measurement: s
+
+    # Temperatura docelowa w zależności od czasu i obecności
+    temp_schedule:
+      name: Harmonogram temperatury
+      description: |
+        Lista wpisów z czasem, dniami oraz temperaturą.
+        Format JSON (np. podaj w UI jako listę dictów):
+          [
+            {"start":"06:00","end":"09:00","temp":21,"days":["mon","tue","wed","thu","fri"]},
+            ...
+          ]
+      selector:
+        object:
+
+    # Temperatura maksymalna zewnętrzna, po której grzałka wyłączona (bezpiecznik)
+    max_external_temp:
+      name: Maksymalna temperatura zewnętrzna
+      default: 25
+      selector:
+        number:
           unit_of_measurement: °C
+    
+    # NOWY PARAMETR: Histereza temperatury (krok)
+    temperature_hysteresis:
+      name: Histereza temperatury (krok)
+      description: |
+        Margines (np. 0.5 °C) zapobiegający częstemu włączaniu/wyłączaniu
+        grzałki wokół temperatury docelowej.
+      default: 0.0
+      selector:
+        number:
+          min: 0.0
+          max: 5.0
           step: 0.1
+          unit_of_measurement: °C
 
-    time_sleep:
-      name: Godzina Rozpoczecia Nocy
-      description: np. 21:00
-      selector: {time: }
-    time_wake:
-      name: Godzina Zakonczenia Nocy
-      description: np. 07:00
-      selector: {time: }
-
-mode: queued
-
-variables:
-  input_trv: !input trv_target
-  input_room_sensor: !input room_sensor
-  input_person_1: !input person_1_entity
-  input_person_2: !input person_2_entity
-  time_sleep_str: !input time_sleep
-  time_wake_str: !input time_wake
-  histereza: !input histeresis
+mode: restart
 
 trigger:
-  # 1. Zmiana statusu obecności
-  - platform: state
-    entity_id: !input person_1_entity
-  - platform: state
-    entity_id: !input person_2_entity
-  # 2. Wyzwalanie w kluczowych godzinach
-  - platform: time
-    at: !input time_sleep
-  - platform: time
-    at: !input time_wake
-  # 3. Zmiana temperatury z czujnika
-  - platform: state
-    entity_id: !input room_sensor
-
-
+  - platform: time_pattern
+    minutes: "/{{ trigger.input.check_interval }}"
+  
 action:
-  # 1. Definiowanie zmiennych i Logika Harmonogramu
-  - variables:
+  - alias: "Pobierz aktualne wartości"
+    variables:
       now_time: "{{ now().time() }}"
-      sleep_time: "{{ as_datetime(time_sleep_str).time() }}"
-      wake_time: "{{ as_datetime(time_wake_str).time() }}"
-      
-      current_room_temp: "{{ states(input_room_sensor) | float(20.0) }}" # Wymuszony FLOAT
-      trv_mode: "{{ state_attr(input_trv, 'hvac_action') }}"
-      
-      # Logika obecnosci: Prawda, gdy CO NAJMNIEJ JEDNA osoba jest w domu
-      is_home: >
-        {% set person_1_home = is_state(input_person_1, 'home') %}
-        {% set person_2_home = is_state(input_person_2, 'home') %}
-        {{ person_1_home or person_2_home }}
-      
-      # Logika Czasowa Spanie: Poprawna Logika Przelomu Polnocy
-      is_sleep_time: >
-        {% if sleep_time > wake_time %}
-          {{ now_time >= sleep_time or now_time < wake_time }}
+      weekday: "{{ now().strftime('%a').lower() }}"    # mon, tue, ...
+      # POPRAWKA: Używamy states() zamiast state_attr(..., 'temperature')
+      ext_temp: "{{ states(trigger.input.external_temp_sensor) | float(0) }}"
+      int_temp: >-
+        {% if trigger.input.internal_temp_sensor %}
+          {{ states(trigger.input.internal_temp_sensor) | float(0) }}
         {% else %}
-          {{ now_time >= sleep_time and now_time < wake_time }}
+          null
         {% endif %}
-        
-      # 2. Obliczanie docelowej temperatury Referencyjnej
-      target_temp: >
-        {% if not is_home %}
-          {# PRIORYTET 1: JESTEŚMY POZA DOMEM #}
-          {{ input_sleep_away | float(19.0) }} 
-        {% elif is_sleep_time %}
-          {# PRIORYTET 2: CZAS SPANIA (NOC) #}
-          {{ input_sleep_away | float(19.0) }} 
-        {% else %}
-          {# PRIORYTET 3: CZAS KOMFORTU #}
-          {{ input_comfort_temp | float(21.0) }}
-        {% endif %}
+      presence: "{{ is_state(trigger.input.presence_sensor, 'on') }}"
+      hysteresis: "{{ trigger.input.temperature_hysteresis | float(0) }}"
 
-      # 3. Logika Decyzyjna ON/OFF z Histereza
-      target_hvac_mode: >
-        {% set histereza_float = histereza | float(0.1) %} # Wymuszony FLOAT
-        {% set target_temp_float = target_temp | float(21.0) %} 
-        
-        {% if current_room_temp >= target_temp_float + histereza_float %} 
-          {# WYLACZENIE (powyzej zadanej + margines) #}
-          off
-        
-        {% elif current_room_temp <= target_temp_float - histereza_float %} 
-          {# WLACZENIE (ponizej zadanej - margines) #}
-          heat
+  - alias: "Wybierz odpowiednią temperaturę z harmonogramu"
+    variables:
+      # znajdź wpis który pasuje do aktualnego czasu i dnia
+      target_temp_entry: >-
+        {%- set entries = trigger.input.temp_schedule %}
+        {%- for entry in entries if weekday in (entry.days | default([])) and
+              now_time >= strptime(entry.start, '%H:%M').time() and
+              now_time < strptime(entry.end,   '%H:%M').time()
+        -%}
+          {{ entry }}
+        {%- endfor %}
+        {%- if entries|length == 0 %}null{%- endif %}
+      target_temp: "{{ (target_temp_entry | default({}))['temp'] | default(null) }}"
 
-        {% elif trv_mode == 'heating' or trv_mode == 'heat' %}
-          {# KONTYNUACJA GRZANIA (w marginesie) #}
-          heat
-        
-        {% else %}
-          {# KONTYNUACJA WYLACZENIA (w marginesie) #}
-          off
-        {% endif %}
-      
-  # 4. Akcje Ustawienie trybu i temperatury referencyjnej
-  - service: climate.set_hvac_mode
-    target:
-      entity_id: "{{ input_trv }}"
-    data:
-      hvac_mode: "{{ target_hvac_mode }}"
+  - alias: "Decyzja o włączeniu/wyłączeniu grzałki"
+    choose:
+      # Gdy temperatura zewnętrzna jest powyżej limitu, wyłącz wszystko
+      - conditions:
+          - condition: numeric_state
+            entity_id: "{{ trigger.input.external_temp_sensor }}"
+            above: "{{ trigger.input.max_external_temp }}"
+        sequence:
+          - service: homeassistant.turn_off
+            target:
+              entity_id: "{{ trigger.input.heating_entity }}"
+          - service: logbook.log
+            data:
+              name: "Smart Heating"
+              message: |
+                Zewnętrzna temperatura {{ ext_temp }}°C przekracza limit
+                ({{ trigger.input.max_external_temp }}°C). Grzałka wyłączona.
 
-  - service: climate.set_temperature
-    target:
-      entity_id: "{{ input_trv }}"
-    data:
-      temperature: "{{ target_temp }}"
+      # Gdy nie ma osoby w domu, ZAWSZE włącz (można to ulepszyć w przyszłości)
+      - conditions:
+          - condition: template
+            value_template: "{{ not presence }}"
+        sequence:
+          - service: homeassistant.turn_on
+            target:
+              entity_id: "{{ trigger.input.heating_entity }}"
+          - service: logbook.log
+            data:
+              name: "Smart Heating"
+              message: |
+                Nie ma nikogo w domu – grzałka pozostaje włączona (tryb nieobecności).
+
+      # Standardowa reguła: włącz/wyłącz na podstawie temperatury wewnętrznej i harmonogramu
+      - conditions:
+          - condition: template
+            value_template: "{{ presence and target_temp is not none }}"
+        sequence:
+          - alias: "Porównaj z aktualną temperaturą (z histerezą)"
+            choose:
+              # Warunek włączenia: Temp wew. < (Docelowa - Histereza)
+              - conditions:
+                  - condition: numeric_state
+                    entity_id: "{{ trigger.input.internal_temp_sensor }}"
+                    below: "{{ target_temp | float(0) - hysteresis }}"
+                sequence:
+                  - service: homeassistant.turn_on
+                    target:
+                      entity_id: "{{ trigger.input.heating_entity }}"
+                  - service: logbook.log
+                    data:
+                      name: "Smart Heating"
+                      message: |
+                        Włączam grzałkę. Temp wew. {{ int_temp }}°C < min. {{ target_temp | float(0) - hysteresis }}°C.
+                        (Docelowa: {{ target_temp }}°C, Histereza: {{ hysteresis }}°C)
+              
+              # Warunek wyłączenia: Temp wew. >= Docelowa
+              - conditions:
+                  - condition: numeric_state
+                    entity_id: "{{ trigger.input.internal_temp_sensor }}"
+                    above_or_equal: "{{ target_temp | float(0) }}"
+                sequence:
+                  - service: homeassistant.turn_off
+                    target:
+                      entity_id: "{{ trigger.input.heating_entity }}"
+                  - service: logbook.log
+                    data:
+                      name: "Smart Heating"
+                      message: |
+                        Wyłączam grzałkę. Temp wew. {{ int_temp }}°C >= docelowa {{ target_temp }}°C.
+            default:
+              - service: logbook.log
+                data:
+                  name: "Smart Heating"
+                  message: |
+                    Temperatura jest w zakresie histerezy ({{ target_temp | float(0) - hysteresis }}°C - {{ target_temp }}°C). Bez zmian.
+
+    default:
+      - service: logbook.log
+        data:
+          name: "Smart Heating"
+          message: "Brak ustalonej temperatury docelowej dla aktualnego czasu/dnia."
