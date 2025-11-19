@@ -84,7 +84,7 @@ action:
             {% set trv_calibration = states(trv_calibration_number) | float %}
             {% set trv_calibration_min = state_attr(trv_calibration_number, "min") | float(-5) %}
             {% set trv_calibration_max = state_attr(trv_calibration_number, "max") | float(5) %}
-            {% set trv_calibration_step = 1.0 %}
+            {% set trv_calibration_step = state_attr(trv_calibration_number, "step") | float(1) %}
 
             {% set step = trv_calibration_step | string %}
             
